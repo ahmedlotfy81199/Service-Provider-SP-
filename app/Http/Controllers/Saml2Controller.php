@@ -32,45 +32,49 @@ class Saml2Controller extends Controller
 
     public function acs(Request $request)
     {
-    
-        // Process the SAML response
-        $this->saml2Auth->processResponse();
+        $samlResponse = $_POST['SAMLResponse']; // Or however you receive the SAML response
+        $decodedResponse = base64_decode($samlResponse); // Decode the base64 encoded SAML Response
+      
+        $dom = new \DOMDocument();
+        $dom->loadXML($decodedResponse);
 
-        // Check for errors
-        $errors = $this->saml2Auth->getErrors();
-        dd($errors);
-        if (!empty($errors)) {
-            throw new \OneLogin\Saml2\Error(
-                'SAML ACS Error: ' . implode(', ', $errors),
-                \OneLogin\Saml2\Error::METADATA_SP_INVALID
-            );
+        $xpath = new \DOMXPath($dom);
+        $xpath->registerNamespace('saml', 'urn:oasis:names:tc:SAML:2.0:assertion');
+        $xpath->registerNamespace('samlp', 'urn:oasis:names:tc:SAML:2.0:protocol');
+
+        // Extract assertions
+        $assertions = $xpath->query('//saml:Assertion');
+
+        // Loop through each assertion
+        foreach ($assertions as $assertion) {
+            // Extract NameID
+            $nameID = $xpath->query('saml:Subject/saml:NameID', $assertion);
+            $email = isset($nameID[0]) ? $nameID[0]->textContent : null;
+
+            // Extract Attributes
+            $attributes = $xpath->query('saml:AttributeStatement/saml:Attribute', $assertion);
+            foreach ($attributes as $attribute) {
+                $attributeName = $attribute->getAttribute('Name');
+                $attributeValues = $xpath->query('saml:AttributeValue', $attribute);
+                foreach ($attributeValues as $value) {
+                    echo "Attribute Name: " . $attributeName . "\n";
+                    echo "Attribute Value: " . $value->textContent . "\n";
+                }
+            }
+
+            echo "Email: " . $email . "\n";
         }
 
-        // Get the attributes from the SAML response
-        $userData = $this->saml2Auth->getAttributes();
-        // Assuming the email attribute is used for authentication
-        if (!isset($userData['email'][0])) {
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Email attribute not found in SAML response'
-            ], 500);
+        // Extract Response details
+        $response = $xpath->query('//samlp:Response');
+        if ($response->length > 0) {
+            $issuer = $xpath->query('samlp:Issuer', $response[0]);
+            echo "Issuer: " . (isset($issuer[0]) ? $issuer[0]->textContent : 'Unknown') . "\n";
+
+            $statusCode = $xpath->query('samlp:Status/samlp:StatusCode', $response[0]);
+            echo "Status Code: " . (isset($statusCode[0]) ? $statusCode[0]->getAttribute('Value') : 'Unknown') . "\n";
         }
-        dd($userData);
-        $userEmail = $userData['email'][0];
-
-        // Authenticate or create the user
-        $user = User::firstOrCreate(['email' => $userEmail], [
-            'name' => $userData['name'][0] ?? $userEmail,
-            // Add other user details as necessary
-        ]);
-
-        // Log the user in
-        Auth::login($user);
-
-        // Redirect to the intended URL or a default page
-        return redirect()->intended('/');
     }
-
 
     public function sls()
     {
